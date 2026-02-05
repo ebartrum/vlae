@@ -21,8 +21,6 @@ def main():
     parser.add_argument("--seed", default=42, type=int)
     parser.add_argument("--num_inference_steps", default=50, type=int)
     parser.add_argument("--cfg_scale", default=5.0, type=float)
-    parser.add_argument("--width", default=512, type=int)
-    parser.add_argument("--height", default=512, type=int)
     
     args = parser.parse_args()
     
@@ -33,14 +31,6 @@ def main():
         print(f"Error: Input image {args.input_image} not found.")
         return
 
-    # Initialize Generator
-    wan_gen = WanGenerator(device=device, vae_checkpoint=args.rgba_checkpoint, use_full_vae=args.use_full_vae)
-    
-    # Update config
-    wan_gen.expt_config.height = args.height
-    wan_gen.expt_config.width = args.width
-    wan_gen.expt_config.num_frames = 33 # Default
-    
     # Load Image
     try:
         image = Image.open(args.input_image)
@@ -51,10 +41,30 @@ def main():
         else:
             image = image.convert("RGB")
             
+        # Calculate dimensions preserving aspect ratio
+        orig_w, orig_h = image.size
+        # Snap to multiples of 16
+        width = round(orig_w / 16) * 16
+        height = round(orig_h / 16) * 16
+        
+        print(f"Input image size: {orig_w}x{orig_h}")
+        print(f"Target video size: {width}x{height}")
+             
+        if (width, height) != (orig_w, orig_h):
+             image = image.resize((width, height), Image.LANCZOS)
+             
         condition_image = to_tensor(image).to(device)
     except Exception as e:
         print(f"Error loading image: {e}")
         return
+
+    # Initialize Generator
+    wan_gen = WanGenerator(device=device, vae_checkpoint=args.rgba_checkpoint, use_full_vae=args.use_full_vae)
+    
+    # Update config
+    wan_gen.expt_config.height = height
+    wan_gen.expt_config.width = width
+    wan_gen.expt_config.num_frames = 81 # Default
     
     # Load Prompt
     # Load Prompt
@@ -71,7 +81,7 @@ def main():
         raise ValueError(f"Could not read caption file {caption_path}")
             
     print(f"Generating video with prompt: '{prompt}'")
-    print(f"Output dimensions: {args.width}x{args.height}")
+    print(f"Output dimensions: {width}x{height}")
     print(f"Refining with {args.num_inference_steps} steps")
     print(f"Using {'Full VAE' if args.use_full_vae else 'TinyVAE'}")
     
