@@ -1,0 +1,47 @@
+Maybe we can integrate the different components into the vlae repo...
+So the actionmesh part would go into the vlae repo. 
+
+So we can run ... the localisation, the dynamic mesh... the
+background synthesis... we're going to want
+this for about 5 different videos. So next... we can run it on 
+the bear. and then... horse jump high?
+
+A couple of steps were needed for using omnimatte:
+git clone https://huggingface.co/alibaba-pai/CogVideoX-Fun-V1.5-5b-InP
+mkdir checkpoints
+cd checkpoints
+https://huggingface.co/datasets/phenanthra/tmp/resolve/12aa841f6a9b750c9bf58b32e067804cb703660e/cogvideox-v1.5-5b-transformer.safetensors
+
+So the frog here now may be... background synthesis.	
+So rerun this for the camel. Then do it for the bear.
+Then do it for horse jump high. Once run: save the
+command.
+Then try incorporating it into vlae.
+
+Then move to bounding boxes and actionmesh.  
+We want these also now, for the bear and horse.
+We are rerunning actionmesh now. And, 
+
+Then: put this in slides. 
+
+Could explain about the idea of the vlae.
+
+Then: work on implementing the adapter for this.
+
+What worries me now: We wont easily get the rotation of the object correct,
+when we do the switcheroo. For that, we need bounding cubes...
+and we need to do something about orientation as well.
+But for that, we can worry about it a little later.
+
+Another point: what if Iasonas asks; where are the results
+relating to nerf scenes as discussed? On this point...
+I could render the statue scene perhaps.
+
+Then... we put the camel into that scene. eg... onto the plinth...
+
+Or... into the fern scene.
+
+360 case: garden scene.
+
+Then, we would want to show that we can generate the
+condition videos for these.
