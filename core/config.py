@@ -1,5 +1,15 @@
 import argparse
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -155,13 +165,13 @@ def parse_args(args=None):
     parser.add_argument(
         "--use_gradient_checkpointing",
         default=True,
-        type=bool,
+        type=str2bool,
         help="Whether to use gradient checkpointing.",
     )
     parser.add_argument(
         "--use_gradient_checkpointing_offload",
         default=True,
-        type=bool,
+        type=str2bool,
         help="Whether to use gradient checkpointing offload.",
     )
     parser.add_argument(

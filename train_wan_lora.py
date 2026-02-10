@@ -45,8 +45,7 @@ class WanLoRALightningModel(pl.LightningModule):
 
         # Load models using manager (except image encoder as per ref, but we pass it anyway?)
         model_manager.load_models(
-            [dit_path, cfg.text_encoder_path,
-             cfg.vae_path]) 
+            [dit_path, cfg.text_encoder_path]) 
 
         self.pipe = WanVideoPipeline(device="cuda:0", torch_dtype=torch.bfloat16)
 
@@ -60,10 +59,12 @@ class WanLoRALightningModel(pl.LightningModule):
             
         self.pipe.fetch_models(model_manager)
 
+
         self.vae = vae
         self.image_encoder = image_encoder
         self.prompter = prompter
         self.dit = self.pipe.dit
+        self.pipe.vae = self.vae
 
         self.tiler_kwargs = {"tiled": cfg.tiled,
              "tile_size": (cfg.tile_size_height, cfg.tile_size_width),
