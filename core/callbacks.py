@@ -42,11 +42,12 @@ class GenerateSampleCallback(Callback):
              ref_frame = ref_frame.resize((new_w, new_h), Image.LANCZOS)
         
         # Default prompt logic
-        caption = "A video of a camel" # Fallback
         caption_path = image_path.replace("images", "captions").replace(".png", ".txt")
         if os.path.exists(caption_path):
              with open(caption_path) as f:
                 caption = f.read().strip()
+        else:
+            raise FileNotFoundError(f"Caption file not found at {caption_path} for validation image {image_path}")
         
         print(f"Generating validation sample for step {trainer.global_step} with prompt: {caption[:50]}...")
         
