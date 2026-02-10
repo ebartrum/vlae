@@ -9,18 +9,14 @@ class GenerateSampleCallback(Callback):
         self._every_n_train_steps = every_n_train_steps
 
     def on_train_start(self, trainer, pl_module):
+        if self._every_n_train_steps < 1:
+            return
         if pl_module.global_rank == 0 and pl_module.logger:
              self._generate(trainer, pl_module)
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         if self._every_n_train_steps < 1 or (trainer.global_step % self._every_n_train_steps != 0) or (not pl_module.logger):
             return
-        
-        # Avoid running twice if on_train_start ran at step 0?
-        # trainer.global_step is usually 0 *after* first batch? Or during?
-        # If running before first batch updates weights, global_step is 0.
-        # on_train_batch_end runs after batch. 
-        # If we run at on_train_start, we probably don't need to run at step 0 again immediately.
         if trainer.global_step == 0:
             return
 
