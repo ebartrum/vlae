@@ -184,6 +184,12 @@ def parse_args(args=None):
         help="How often to save validation samples",
     )
     parser.add_argument(
+        "--validation_num_inference_steps",
+        type=int,
+        default=50,
+        help="Number of inference steps for validation.",
+    )
+    parser.add_argument(
         "--training_speed_every_n",
         type=int,
         default=100,
