@@ -12,7 +12,6 @@ from diffsynth.prompters import WanPrompter
 from peft import LoraConfig, inject_adapter_in_model
 import random
 import torch.nn.functional as F
-
 from core.dataset import VideoCaptionDataset
 from core.config import parse_args
 from core.utils import log_training_info, log_data
@@ -146,7 +145,6 @@ class WanLoRALightningModel(pl.LightningModule):
 
             missing, unexpected = model.load_state_dict(state_dict_new, strict=False)
             print(f"Loaded LoRA: {len(missing)} missing, {len(unexpected)} unexpected keys.")
-
     
     def training_step(self, batch, batch_idx):
         text = batch["text"][0]
@@ -206,7 +204,6 @@ class WanLoRALightningModel(pl.LightningModule):
                 batch_train = {"latents": latents.unsqueeze(0),
                     "prompt_emb": prompt_emb, "image_emb": image_emb}
         
-
         p = random.random()
         latents = batch_train["latents"].to(self.device)
         prompt_emb = batch_train["prompt_emb"]
