@@ -293,9 +293,9 @@ def train(args):
 
     vae = WanVideoVAE()
     vae.model.load_state_dict(torch.load(args.vae_path))
-    vae = vae.to(torch.device("cpu")).to(torch.bfloat16) # Offload VAE to CPU? ref does this.
+    vae = vae.to(torch.device("cuda")).to(torch.bfloat16)
     
-    image_encoder = model_manager.fetch_model("wan_video_image_encoder")
+    image_encoder = model_manager.fetch_model("wan_video_image_encoder").to(torch.device("cuda")).to(torch.bfloat16)
 
     model = WanLoRALightningModel(
         dit_path=args.dit_path,
