@@ -35,6 +35,11 @@ class GenerateSampleCallback(Callback):
             return
 
         ref_frame = Image.open(image_path).convert("RGB")
+        w, h = ref_frame.size
+        new_w = round(w / 16) * 16
+        new_h = round(h / 16) * 16
+        if (new_w, new_h) != (w, h):
+             ref_frame = ref_frame.resize((new_w, new_h), Image.LANCZOS)
         
         # Default prompt logic
         caption = "A video of a camel" # Fallback
@@ -50,12 +55,12 @@ class GenerateSampleCallback(Callback):
                 prompt=caption,
                 negative_prompt=CHINESE_NEGATIVE_PROMPT,
                 input_image=ref_frame,
-                num_frames=expt_config.num_frames,
+                num_frames=expt_config.validation_num_frames,
                 num_inference_steps=expt_config.validation_num_inference_steps,
                 cfg_scale=5.0,
                 seed=42,
-                height=expt_config.height,
-                width=expt_config.width,
+                height=new_h,
+                width=new_w,
                 output_type = "tensor"
             )
 

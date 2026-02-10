@@ -80,10 +80,16 @@ def parse_args(args=None):
         help="Number of steps per epoch.",
     )
     parser.add_argument(
-        "--num_frames",
+        "--validation_num_frames",
         type=int,
-        default=33,
-        help="Number of frames.",
+        default=81,
+        help="Number of frames for validation/inference.",
+    )
+    parser.add_argument(
+        "--max_num_frames",
+        type=int,
+        default=81,
+        help="Maximum number of frames for training.",
     )
     parser.add_argument(
         "--height",

@@ -271,9 +271,7 @@ class WanLoRALightningModel(pl.LightningModule):
 def train(args):
     dataset = VideoCaptionDataset(
         args.dataset_path,
-        num_frames=args.num_frames,
-        height=args.height,
-        width=args.width,
+        max_num_frames=args.max_num_frames,
         steps_per_epoch=args.steps_per_epoch,
     )
     

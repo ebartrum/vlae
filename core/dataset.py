@@ -6,11 +6,9 @@ from torchvision.transforms import Resize, CenterCrop, Compose
 import torch.nn.functional as F
 
 class VideoCaptionDataset(Dataset):
-    def __init__(self, dataset_path, num_frames=33, height=512, width=512, frame_interval=1, steps_per_epoch=None):
+    def __init__(self, dataset_path, max_num_frames=81, frame_interval=1, steps_per_epoch=None):
         self.dataset_path = dataset_path
-        self.num_frames = num_frames
-        self.height = height
-        self.width = width
+        self.max_num_frames = max_num_frames
         self.frame_interval = frame_interval
         
         self.videos_dir = os.path.join(dataset_path, "videos")
@@ -27,11 +25,6 @@ class VideoCaptionDataset(Dataset):
         self.length = len(self.video_files)
         if steps_per_epoch is not None:
              self.length = steps_per_epoch
-             
-        self.transforms = Compose([
-            Resize(size=min(height, width), antialias=True),
-            CenterCrop(size=(height, width))
-        ])
 
     def __len__(self):
         return self.length
@@ -66,55 +59,54 @@ class VideoCaptionDataset(Dataset):
             # Return dummy or next
             return self.__getitem__((idx + 1) % len(self.video_files))
 
-        if video.shape[0] < self.num_frames:
-             # Loop padding
-             repeats = (self.num_frames + video.shape[0] - 1) // video.shape[0]
-             video = video.repeat(repeats, 1, 1, 1)
+        # Handle Frame Count (1 mod 8)
+        # Target should be <= max_num_frames
+        T = video.shape[0]
+        
+        # Calculate max we can use
+        target_T = min(T, self.max_num_frames)
+        
+        # Ensure 1 mod 8
+        # (target_T - 1) // 8 * 8 + 1
+        target_T = (target_T - 1) // 8 * 8 + 1
+        
+        if target_T < 1: 
+             # Too short? loop?
+             # For now just repeat to meet at least 9 frames?
+             pass 
              
-        # Simple sampling: random start
-        total_frames = video.shape[0]
-        max_start = max(0, total_frames - self.num_frames * self.frame_interval)
-        start_idx = torch.randint(0, max_start + 1, (1,)).item()
-        indices = torch.arange(start_idx, start_idx + self.num_frames * self.frame_interval, self.frame_interval)
-        indices = torch.clamp(indices, 0, total_frames - 1)
+        # If video is shorter than needed for minimal 1 mod 8 (e.g. < 1?? 1 mod 8 is 1, 9, 17...)
+        # Minimal is 1. If T >= 1, we are good.
         
-        video = video[indices] # [F, C, H, W]
+        # Sampling
+        # Simple random crop
+        if T > target_T:
+             start_idx = torch.randint(0, T - target_T + 1, (1,)).item()
+             video = video[start_idx : start_idx + target_T]
+        else:
+             # Just use it (if it matches 1 mod 8 logic above)
+             video = video[:target_T] # Should be essentially no-op if logic is right
+             
+        # Handle Resolution
+        # [T, C, H, W]
+        _, _, H, W = video.shape
+        new_H = round(H / 16) * 16
+        new_W = round(W / 16) * 16
         
-        # Transform
-        # Resize expects [C, H, W] or [B, C, H, W]
-        # We have [T, C, H, W]. T acts as Batch
-        video = self.transforms(video)
+        if (new_H, new_W) != (H, W):
+             video = F.interpolate(video, size=(new_H, new_W), mode='bilinear', align_corners=False, antialias=True)
         
-        # Normalize to [-1, 1] (Assuming read_video returns 0-255 uint8)
-        # Verify read_video output. If output_format="TCHW", it returns tensor. 
-        # Usually it is uint8 0-255 if directly read? Or float? 
-        # Checking docs: read_video returns (video, audio, info). Video is tensor.
-        # Dtype depends on backend but usually uint8.
-        
+        # Normalize to [-1, 1]
         if video.dtype == torch.uint8:
             video = video.float() / 255.0
             
         video = 2.0 * video - 1.0 # [-1, 1]
         
-        # First frame for conditioning
-        # Training code expects [H, W, C] in 0-255 range for image encoder? 
-        # Let's see train_wan_lora.py logic:
-        # first_frame_tensor = 2*(batch["first_frame"].float() / 255.) - 1
-        # So batch["first_frame"] should be 0-255.
-        
         first_frame = (video[0] + 1.0) / 2.0 * 255.0
         first_frame = first_frame.permute(1, 2, 0).to(torch.uint8) # [H, W, C]
         
         return {
-            "video": video.permute(1, 0, 2, 3), # [C, T, H, W] - standard for video models often
-            # BUT: WanLoRALightningModel expects:
-            # latents = self.vae.encode(video, ...) where video is [B, C, T, H, W]
-            # So dataset should return [C, T, H, W] or [T, C, H, W]? 
-            # batch["video"] will add B dim.
-            # train_wan_lora.py: 
-            # _, _, num_frames, height, width = video.shape -> [B, C, T, H, W]
-            # So we need to return [C, T, H, W]
-            
+            "video": video.permute(1, 0, 2, 3), # [C, T, H, W]
             "text": text,
             "path": video_path,
             "first_frame": first_frame # [H, W, C]
