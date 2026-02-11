@@ -51,6 +51,10 @@ class VideoCaptionDataset(Dataset):
             
         # Load Video
         try:
+            import warnings
+            # Suppress the specific deprecation warning from torchvision
+            warnings.filterwarnings("ignore", category=UserWarning, message="The video decoding and encoding capabilities of torchvision are deprecated")
+            
             # Using read_video. Default output is [T, H, W, C]
             video, _, _ = torchvision.io.read_video(video_path, output_format="TCHW", pts_unit='sec')
             # If successful, output is [T, C, H, W]
