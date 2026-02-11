@@ -246,9 +246,9 @@ def parse_args(args=None):
         help="Option to use nf4 precision",
     )
     parser.add_argument(
-        "--cache_latents",
+        "--recompute_latents",
         action="store_true",
-        help="Cache the first batch's latents and embeddings for overfitting testing.",
+        help="Force recompute cached latents and embeddings.",
     )
     parser.add_argument(
         "--reload_checkpoint",

@@ -193,20 +193,19 @@ class WanLoRALightningModel(pl.LightningModule):
         diagnostics = {}
         
         batch_train = None
-        if self.cfg.cache_latents:
-            # Check for disk cache
-            video_path = batch["path"][0]
-            dirname = os.path.dirname(video_path)
-            basename = os.path.basename(video_path)
-            cache_dir = os.path.join(dirname, ".latents_cache")
-            cache_filename = basename + ".pt"
-            cache_path = os.path.join(cache_dir, cache_filename)
-            
-            if os.path.exists(cache_path):
-                try:
-                    batch_train = torch.load(cache_path, map_location=self.device)
-                except Exception as e:
-                    print(f"Failed to load cache from {cache_path}: {e}")
+        # Check for disk cache
+        video_path = batch["path"][0]
+        dirname = os.path.dirname(video_path)
+        basename = os.path.basename(video_path)
+        cache_dir = os.path.join(dirname, ".latents_cache")
+        cache_filename = basename + ".pt"
+        cache_path = os.path.join(cache_dir, cache_filename)
+        
+        if os.path.exists(cache_path):
+            try:
+                batch_train = torch.load(cache_path, map_location=self.device)
+            except Exception as e:
+                print(f"Failed to load cache from {cache_path}: {e}")
 
         if batch_train is None:
             batch_train = self.encode_video(batch)
@@ -322,48 +321,53 @@ def train(args):
         cfg = args
     )
 
-    if args.cache_latents:
-        # Move model to GPU for encoding
-        model.cuda()
-        print("Checking latent cache...")
-        cache_dir = os.path.join(dataset.videos_dir, ".latents_cache")
-        os.makedirs(cache_dir, exist_ok=True)
-        
-        num_files = len(dataset.video_files)
-        from torch.utils.data import default_collate
-        
-        for i in range(num_files):
-            sample = dataset[i] 
-            path = sample["path"]
-            filename = os.path.basename(path)
-            cache_filename = filename + ".pt"
-            cache_path = os.path.join(cache_dir, cache_filename)
-            
-            if not os.path.exists(cache_path):
-                print(f"Generating cache for {filename}...")
-                batch = default_collate([sample])
-                
-                # Encode
-                encoded = model.encode_video(batch)
+    # Always check/generate cache
+    # Move model to GPU for encoding (if generation needed)
+    cache_dir = os.path.join(dataset.videos_dir, ".latents_cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    
+    num_files = len(dataset.video_files)
+    from torch.utils.data import default_collate
+    
+    model_on_gpu = False
 
-                # Move to CPU for saving
-                encoded_cpu = {}
-                for k, v in encoded.items():
-                    if isinstance(v, torch.Tensor):
-                        encoded_cpu[k] = v.cpu()
-                    elif isinstance(v, dict):
-                        encoded_cpu[k] = {}
-                        for k2, v2 in v.items():
-                            if isinstance(v2, torch.Tensor):
-                                encoded_cpu[k][k2] = v2.cpu()
-                            else:
-                                encoded_cpu[k][k2] = v2
-                    else:
-                        encoded_cpu[k] = v
-                
-                torch.save(encoded_cpu, cache_path)
+    print("Checking latent cache...")
+    for i in range(num_files):
+        sample = dataset[i] 
+        path = sample["path"]
+        filename = os.path.basename(path)
+        cache_filename = filename + ".pt"
+        cache_path = os.path.join(cache_dir, cache_filename)
         
-        print(f"Latent cache verified/generated at {cache_dir}")
+        if args.recompute_latents or not os.path.exists(cache_path):
+            if not model_on_gpu:
+                model.cuda()
+                model_on_gpu = True
+
+            print(f"Generating cache for {filename}...")
+            batch = default_collate([sample])
+            
+            # Encode
+            encoded = model.encode_video(batch)
+
+            # Move to CPU for saving
+            encoded_cpu = {}
+            for k, v in encoded.items():
+                if isinstance(v, torch.Tensor):
+                    encoded_cpu[k] = v.cpu()
+                elif isinstance(v, dict):
+                    encoded_cpu[k] = {}
+                    for k2, v2 in v.items():
+                        if isinstance(v2, torch.Tensor):
+                            encoded_cpu[k][k2] = v2.cpu()
+                        else:
+                            encoded_cpu[k][k2] = v2
+                else:
+                    encoded_cpu[k] = v
+            
+            torch.save(encoded_cpu, cache_path)
+    
+    print(f"Latent cache verified/generated at {cache_dir}")
 
 
     trainer = pl.Trainer(
