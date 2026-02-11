@@ -148,62 +148,50 @@ class WanLoRALightningModel(pl.LightningModule):
             print(f"Loaded LoRA: {len(missing)} missing, {len(unexpected)} unexpected keys.")
     
     def training_step(self, batch, batch_idx):
-        text = batch["text"][0]
-        video = batch["video"] # [C, T, H, W]
-        path = batch["path"][0]
-
         diagnostics = {}
-        with torch.no_grad():
-            if video is not None:
-                prompt_emb = {'context': self.prompter.encode_prompt(text)}
-                
-                # dataset returns [C, T, H, W] in [-1, 1]. 
-                # VAE encode expects [B, C, T, H, W]? 
-                # Or [C, T, H, W]?
-                # Ref: latents = self.vae.encode(video, ...) where video is batch["video"].
-                # Batch size is 1 from dataloader usually.
-                # So batch["video"] is [1, C, T, H, W] if using standard collate?
-                # dataset returns dict. DataLoader collates into batch.
-                # video from batch is [B, C, T, H, W].
-                
-                video = video.to(dtype=torch.bfloat16, device=self.device) # [B, C, T, H, W]
-                # .vae.encode expects [B, C, T, H, W]
-                latents = self.vae.encode(video, device=self.device, **self.tiler_kwargs)[0] # [16, T_latent, H_latent, W_latent]
-                
-                # Image Conditioning (First Frame)
-                if "first_frame" in batch:
-                    # batch["first_frame"] is [B, H, W, C] (0-255 uint8)
-                    first_frame_tensor = batch["first_frame"].float() / 255.0
-                    first_frame_tensor = 2.0 * first_frame_tensor - 1.0
-                    first_frame_tensor = first_frame_tensor.permute(0, 3, 1, 2) # [B, C, H, W]
+        if self.cfg.cache_latents and hasattr(self, 'latents_cache'):
+             print(f"Using cached latents for step {batch_idx}")
+             batch_train = self.latents_cache
+        else:
+            text = batch["text"][0]
+            video = batch["video"]
+            path = batch["path"][0]
+    
+            with torch.no_grad():
+                if video is not None:
+                    prompt_emb = {'context': self.prompter.encode_prompt(text)}
                     
-                    clip_context = self.image_encoder.encode_image(
-                        [first_frame_tensor]).to(
-                            dtype=torch.bfloat16,
-                            device=self.device)
+                    video = video.to(dtype=torch.bfloat16, device=self.device) # [B, C, T, H, W]
+                    latents = self.vae.encode(video, device=self.device, **self.tiler_kwargs)[0] # [16, T_latent, H_latent, W_latent]
                     
-                    # VAE condition
-                    # num_frames from config or video shape?
-                    num_frames = video.shape[2] 
-                    latent_condition = self.vae.latent_image_condition(
-                        first_frame_tensor, num_frames).to(
-                        dtype=torch.bfloat16, device=self.device)
+                    # Image Conditioning (First Frame)
+                    if "first_frame" in batch:
+                        # batch["first_frame"] is [B, H, W, C] (0-255 uint8)
+                        first_frame_tensor = batch["first_frame"].float() / 255.0
+                        first_frame_tensor = 2.0 * first_frame_tensor - 1.0
+                        first_frame_tensor = first_frame_tensor.permute(0, 3, 1, 2) # [B, C, H, W]
+                        
+                        clip_context = self.image_encoder.encode_image(
+                            [first_frame_tensor]).to(
+                                dtype=torch.bfloat16,
+                                device=self.device)
+                        
+                        # VAE condition
+                        num_frames = video.shape[2] 
+                        latent_condition = self.vae.latent_image_condition(
+                            first_frame_tensor, num_frames).to(
+                            dtype=torch.bfloat16, device=self.device)
+    
+                        image_emb = {
+                            "clip_feature": clip_context, "y": latent_condition}
+                    else:
+                        image_emb = {}
+                    
+                    batch_train = {"latents": latents.unsqueeze(0),
+                        "prompt_emb": prompt_emb, "image_emb": image_emb}
 
-                    image_emb = {
-                        "clip_feature": clip_context, "y": latent_condition}
-                else:
-                    image_emb = {}
-                
-                # Prepare batch for training
-                # latents [C, T, H, W] -> [1, C, T, H, W] if not already?
-                # vae.encode returns [B, C, T, H, W] or list? 
-                # DiffSynth VAE encode: returns list of latents.
-                # [0] gives first item in batch? 
-                # If B=1, latents is [C, T, H, W]. Need unsqueeze?
-                # Ref: latents = self.vae.encode(...)[0]. unsqueeze(0).
-                
-                batch_train = {"latents": latents.unsqueeze(0),
-                    "prompt_emb": prompt_emb, "image_emb": image_emb}
+            if self.cfg.cache_latents:
+                self.latents_cache = batch_train
         
         p = random.random()
         latents = batch_train["latents"].to(self.device)
@@ -220,7 +208,7 @@ class WanLoRALightningModel(pl.LightningModule):
         if "y" in image_emb:
             if p < 0.1:
                 image_emb["y"] = torch.zeros_like(image_emb["y"])
-
+    
         # Loss
         noise = torch.randn_like(latents)
         timestep_id = torch.randint(0, self.scheduler.num_train_timesteps, (1,))
@@ -238,13 +226,13 @@ class WanLoRALightningModel(pl.LightningModule):
             use_gradient_checkpointing=self.use_gradient_checkpointing,
             use_gradient_checkpointing_offload=self.use_gradient_checkpointing_offload,
             add_condition = None)
-
+    
         loss = F.mse_loss(noise_pred.float(), training_target.float())
         loss = loss * self.scheduler.training_weight(timestep)
-
+    
         self.log("train_loss", loss, prog_bar=True)
         diagnostics["timestep"] = int(timestep.item())
-
+    
         return {"loss": loss, "diagnostics": diagnostics}
 
     def configure_optimizers(self):
