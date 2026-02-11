@@ -14,8 +14,8 @@ def main():
     parser.add_argument("--caption", default=None, type=str, help="Path to caption file")
     
     # VAE params
-    parser.add_argument("--use_full_vae", action="store_true", help="Use full Wan VAE instead of TinyVAE")
-    parser.add_argument("--rgba_checkpoint", default="checkpoints/taew2_1.pth", type=str, help="RGBA TAEHV checkpoint path (used if specific checkpoint needed for TinyVAE)")
+    parser.add_argument("--vae_type", default="wan_vae", type=str, choices=["wan_vae", "tiny_vae"], help="VAE type: wan_vae (default) or tiny_vae")
+    parser.add_argument("--rgba_checkpoint", default="checkpoints/taew2_1.pth", type=str, help="TinyVAE checkpoint path")
     
     # Generation params
     parser.add_argument("--seed", default=42, type=int)
@@ -63,7 +63,7 @@ def main():
         return
 
     # Initialize Generator
-    wan_gen = WanGenerator(device=device, vae_checkpoint=args.rgba_checkpoint, use_full_vae=args.use_full_vae, checkpoint_path=args.ckpt_path)
+    wan_gen = WanGenerator(device=device, vae_checkpoint=args.rgba_checkpoint, vae_type=args.vae_type, checkpoint_path=args.ckpt_path)
     
     # Update config
     wan_gen.expt_config.height = height
@@ -87,7 +87,7 @@ def main():
     print(f"Generating video with prompt: '{prompt}'")
     print(f"Output dimensions: {width}x{height}")
     print(f"Refining with {args.num_inference_steps} steps")
-    print(f"Using {'Full VAE' if args.use_full_vae else 'TinyVAE'}")
+    print(f"Using {args.vae_type}")
     
     video = wan_gen.generate_video(
         prompt,
@@ -103,15 +103,8 @@ def main():
     video_rgb_hwc = video_rgb.permute(0, 2, 3, 1).cpu().numpy()
     video_rgb_hwc = (video_rgb_hwc * 255).astype(np.uint8)
     
-    video_rgb_hwc = (video_rgb_hwc * 255).astype(np.uint8)
-    
-    video_rgb_hwc = (video_rgb_hwc * 255).astype(np.uint8)
-    
-    # TinyVAE output seems to be BGR, so we swap to RGB (for save_video which expects RGB)
-    # Full VAE (DiffSynth) output seems to be RGB, so we DON'T swap
-    if not args.use_full_vae:
-         print(f"Swapping channels (BGR <-> RGB)... (Standard for TinyVAE)")
-         video_rgb_hwc = video_rgb_hwc[..., ::-1]
+    # We assume RGB output now for both VAEs
+    # if not args.use_full_vae: ... REMOVED
 
     output_dir = os.path.dirname(args.output_filename)
     if output_dir:

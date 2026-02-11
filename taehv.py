@@ -370,10 +370,36 @@ class WanCompatibleTAEHV(TAEHV):
         latents = latents.permute(0, 2, 1, 3, 4)
         
         video = self.decode_video(latents)
-        # [0, 1] -> [-1, 1]
-        video = (video * 2.0) - 1.0
         # [B, T, C, H, W] -> [B, C, T, H, W]
         return video.permute(0, 2, 1, 3, 4)
+
+    def latent_image_condition(self, img_tensor, num_frames):
+        # img_tensor: [B, C, H, W] (usually B=1)
+        msk = torch.ones(1, num_frames, img_tensor.shape[2]//8, img_tensor.shape[3]//8, device=img_tensor.device)
+        msk[:, 1:] = 0
+        msk = torch.concat([torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]], dim=1)
+        msk = msk.view(1, msk.shape[1] // 4, 4,
+           img_tensor.shape[2]//8, img_tensor.shape[3]//8)
+        msk = msk.transpose(1, 2)[0]
+        
+        # vae_input: [C, T, H, W]
+        # img_tensor.transpose(0, 1) -> [C, B, H, W]. If B=1 -> [C, 1, H, W]
+        vae_input = torch.concat([img_tensor.transpose(0, 1),
+            torch.zeros(3, num_frames-1, img_tensor.shape[2],
+                img_tensor.shape[3]).to(device=img_tensor.device, dtype=img_tensor.dtype)], dim=1)
+
+        latent_img_condition = self.encode_latent_img_condition(vae_input, msk)
+        return latent_img_condition
+
+    def encode_latent_img_condition(self, vae_input, msk):
+        # vae_input: [C, T, H, W]
+        # self.encode expects [B, C, T, H, W]
+        # returns [B, C, T, H, W]
+        latent_img_condition = self.encode(vae_input.unsqueeze(0), device=msk.device)[0] # [C, T, H, W]
+        latent_img_condition = torch.concat([msk, latent_img_condition])
+        latent_img_condition = latent_img_condition.unsqueeze(0)
+        return latent_img_condition
+
 
 @torch.no_grad()
 

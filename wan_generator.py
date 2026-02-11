@@ -78,10 +78,11 @@ class DefaultVPredStrategy(VPredStrategy):
         return v_pred_nega + cfg_scale * (v_pred_posi - v_pred_nega)
 
 
+
 class WanGenerator:
-    def __init__(self, device="cuda:0", vae_checkpoint="checkpoints/taew_rgba_sigma1e-4.pth", use_full_vae=False, checkpoint_path=None):
+    def __init__(self, device="cuda:0", vae_checkpoint="checkpoints/taew2_1.pth", vae_type="wan_vae", checkpoint_path=None):
         self.device = torch.device(device)
-        self.use_full_vae = use_full_vae
+        self.vae_type = vae_type
         
         # Load Wan Pipeline
         # Load default config
@@ -90,23 +91,21 @@ class WanGenerator:
         # Pass device to load_wan_lora_pipe
         self.pipe = load_wan_lora_pipe(self.expt_config, checkpoint_path, device=device)
         # pipe.device is now set correctly by load_wan_lora_pipe
-
-
         
-        if not self.use_full_vae:
-            # Load TinyVAE
-            if "taew2_1" in vae_checkpoint:
-                print(f"Loading standard RGB TAEHV from {vae_checkpoint}")
-                self.tiny_vae = TAEHV(checkpoint_path=vae_checkpoint).to(self.device).to(self.pipe.torch_dtype)
-            else:
-                print(f"Loading RGBA TAEHV from {vae_checkpoint}")
-                self.tiny_vae = RGBA_TAEHV(checkpoint_path=vae_checkpoint).to(self.device).to(self.pipe.torch_dtype)
-            self.tiny_vae.eval()
+        if self.vae_type == "tiny_vae":
+            print(f"Loading TinyVAE (WanCompatibleTAEHV) from {vae_checkpoint}")
+            from taehv import WanCompatibleTAEHV
+            self.vae = WanCompatibleTAEHV(checkpoint_path=vae_checkpoint).to(self.device).to(self.pipe.torch_dtype)
+            self.vae.eval()
+            # Also update pipe.vae for consistency if used elsewhere
+            self.pipe.vae = self.vae
         else:
-            print("Using Full Wan VAE for decoding.")
-            self.tiny_vae = None
-            
-        
+            print("Using Standard Wan VAE.")
+            self.vae = self.pipe.vae
+            # Ensure it's on device if not loaded yet (though load_wan_lora_pipe might load it lazily)
+            # We can load it explicitly or trust the pipeline checks
+            pass
+
         
     @torch.no_grad()
     def compute_video(self, rendered_video, prompt, t_min=0.02, t_max=0.98, seed=None, condition_image=None, timestep_ratio=None, cfg_scale=5.0):
@@ -149,13 +148,14 @@ class WanGenerator:
         video_normalized = (video_for_wan * 2.0) - 1.0
         video_normalized = video_normalized.unsqueeze(0).to(dtype=self.pipe.torch_dtype, device=self.device) # [1, T, C, H, W]
         
-        # pipe.encode_video expects [B, C, T, H, W]
+        # VAE encode expects [B, C, T, H, W]
         video_normalized = video_normalized.permute(0, 2, 1, 3, 4) # [1, C, T, H, W]
         
         # Encode
+        # Load VAE if needed (though self.vae should be ready)
         self.pipe.load_models_to_device(['vae'])
-        latents = self.pipe.encode_video(video_normalized, tiled=True)
-        latents = latents.to(self.device)
+        
+        latents = self.vae.encode(video_normalized, device=self.device)
         
         # 2. Sample Timestep
         # Wan uses sigma, but let's use the scheduler's timesteps
@@ -240,44 +240,21 @@ class WanGenerator:
         
     def _decode_latents(self, latents, T_orig=None):
         """
-        Helper to decode latents using either Full VAE or TinyVAE.
+        Helper to decode latents using unified self.vae interface.
         """
-        # 5. Decode
-        if self.use_full_vae:
-            # Decode with Full VAE
-            self.pipe.load_models_to_device(['vae'])
-            decoded_video = self.pipe.decode_video(latents, tiled=True)
-            # [B, C, T, H, W]
-            decoded_video = decoded_video.squeeze(0) # [C, T, H, W]
-            decoded_video = decoded_video.permute(1, 0, 2, 3) # [T, C, H, W]
-            
-            # Use dynamic normalization
-            vmin = decoded_video.min()
-            if vmin < -0.1:
-                decoded_video = (decoded_video + 1.0) / 2.0
-            
-            decoded_video = decoded_video.clamp(0, 1)
-        else:
-            # Decode with TinyVAE
-            # TinyVAE expects [N, T, C, H, W]
-            # Latents from Wan are [1, 16, T, H, W] -> need [1, T, 16, H, W] for TinyVAE
-            # BUT: compute_video latents might be different?
-            # compute_video: latent_tweedie [1, 16, T, H, W] (from add_noise of [1, 16, T, H, W])
-            
-            # Check shape to be safe
-            if latents.shape[1] == 16: # [1, 16, T, H, W]
-                 latents_for_decoding = latents.permute(0, 2, 1, 3, 4)
-            else:
-                 latents_for_decoding = latents # Assume correct if not standard Wan latent shape?
-            
-            decoded_video = decoded_video.squeeze(0)
-            
-            # Use dynamic normalization
-            vmin = decoded_video.min()
-            if vmin < -0.1:
-                decoded_video = (decoded_video + 1.0) / 2.0
-                
-            decoded_video = decoded_video.clamp(0, 1)
+        self.pipe.load_models_to_device(['vae'])
+
+        # Decode
+        # self.vae.decode expects [B, C, T, H, W]
+        # returns [B, C, T, H, W] in [-1, 1]
+        decoded_video_batch = self.vae.decode(latents, device=self.device)
+        
+        decoded_video = decoded_video_batch.squeeze(0) # [C, T, H, W]
+        decoded_video = decoded_video.permute(1, 0, 2, 3) # [T, C, H, W]
+        
+        # Denormalize [-1, 1] -> [0, 1]
+        decoded_video = (decoded_video + 1.0) / 2.0
+        decoded_video = decoded_video.clamp(0, 1)
         
         # Crop back to original length if needed
         if T_orig is not None:
@@ -383,6 +360,10 @@ class WanGenerator:
                     "video_x1_hat": video_x1_hat.cpu(),
                     "is_final": False
                 })
+                
+                # Reload DiT if we are continuing and it might have been unloaded by decoding logic
+                if i < len(timesteps) - 1:
+                    self.pipe.load_models_to_device(["dit"])
             
             # Step
             latents = self.pipe.scheduler.step(v_pred, t, latents)
