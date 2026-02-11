@@ -22,6 +22,10 @@ def main():
     parser.add_argument("--num_inference_steps", default=50, type=int)
     parser.add_argument("--cfg_scale", default=5.0, type=float)
     
+    parser.add_argument("--ckpt_path", type=str, default=None, help="Path to LoRA checkpoint")
+    
+    parser.add_argument("--num_frames", default=81, type=int, help="Number of frames to generate")
+    
     args = parser.parse_args()
     
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -59,12 +63,12 @@ def main():
         return
 
     # Initialize Generator
-    wan_gen = WanGenerator(device=device, vae_checkpoint=args.rgba_checkpoint, use_full_vae=args.use_full_vae)
+    wan_gen = WanGenerator(device=device, vae_checkpoint=args.rgba_checkpoint, use_full_vae=args.use_full_vae, checkpoint_path=args.ckpt_path)
     
     # Update config
     wan_gen.expt_config.height = height
     wan_gen.expt_config.width = width
-    wan_gen.expt_config.num_frames = 81 # Default
+    wan_gen.expt_config.num_frames = args.num_frames
     
     # Load Prompt
     # Load Prompt
@@ -99,10 +103,22 @@ def main():
     video_rgb_hwc = video_rgb.permute(0, 2, 3, 1).cpu().numpy()
     video_rgb_hwc = (video_rgb_hwc * 255).astype(np.uint8)
     
-    output_dir = "output"
-    os.makedirs(output_dir, exist_ok=True)
-    save_video(video_rgb_hwc, os.path.join(output_dir, args.output_filename), fps=20)
-    print(f"Successfully saved video to {args.output_filename}")
+    video_rgb_hwc = (video_rgb_hwc * 255).astype(np.uint8)
+    
+    video_rgb_hwc = (video_rgb_hwc * 255).astype(np.uint8)
+    
+    # TinyVAE output seems to be BGR, so we swap to RGB (for save_video which expects RGB)
+    # Full VAE (DiffSynth) output seems to be RGB, so we DON'T swap
+    if not args.use_full_vae:
+         print(f"Swapping channels (BGR <-> RGB)... (Standard for TinyVAE)")
+         video_rgb_hwc = video_rgb_hwc[..., ::-1]
 
+    output_dir = os.path.dirname(args.output_filename)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    
+    save_video(video_rgb_hwc, args.output_filename, fps=20)
+    print(f"Successfully saved video to {args.output_filename}")
+    
 if __name__ == "__main__":
     main()

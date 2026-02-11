@@ -79,14 +79,13 @@ class DefaultVPredStrategy(VPredStrategy):
 
 
 class WanGenerator:
-    def __init__(self, device="cuda:0", vae_checkpoint="checkpoints/taew_rgba_sigma1e-4.pth", use_full_vae=False):
+    def __init__(self, device="cuda:0", vae_checkpoint="checkpoints/taew_rgba_sigma1e-4.pth", use_full_vae=False, checkpoint_path=None):
         self.device = torch.device(device)
         self.use_full_vae = use_full_vae
         
         # Load Wan Pipeline
         # Load default config
         self.expt_config = parse_args([])
-        checkpoint_path = None
             
         # Pass device to load_wan_lora_pipe
         self.pipe = load_wan_lora_pipe(self.expt_config, checkpoint_path, device=device)
@@ -251,6 +250,12 @@ class WanGenerator:
             # [B, C, T, H, W]
             decoded_video = decoded_video.squeeze(0) # [C, T, H, W]
             decoded_video = decoded_video.permute(1, 0, 2, 3) # [T, C, H, W]
+            
+            # Use dynamic normalization
+            vmin = decoded_video.min()
+            if vmin < -0.1:
+                decoded_video = (decoded_video + 1.0) / 2.0
+            
             decoded_video = decoded_video.clamp(0, 1)
         else:
             # Decode with TinyVAE
@@ -265,10 +270,14 @@ class WanGenerator:
             else:
                  latents_for_decoding = latents # Assume correct if not standard Wan latent shape?
             
-            decoded_video = self.tiny_vae.decode_video(
-                latents_for_decoding, parallel=True)
-            # Post-process: [N, T, C, H, W] -> [T, C, H, W] in [0, 1]
-            decoded_video = decoded_video.squeeze(0).clamp(0, 1)
+            decoded_video = decoded_video.squeeze(0)
+            
+            # Use dynamic normalization
+            vmin = decoded_video.min()
+            if vmin < -0.1:
+                decoded_video = (decoded_video + 1.0) / 2.0
+                
+            decoded_video = decoded_video.clamp(0, 1)
         
         # Crop back to original length if needed
         if T_orig is not None:
