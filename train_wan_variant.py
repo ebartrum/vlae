@@ -33,11 +33,15 @@ class WanLoRALightningModel(pl.LightningModule):
         vae=None,
         image_encoder=None,
         prompter=None,
-        cfg=None
+        cfg=None,
+        variant="i2v",
+        model_type="lora",
     ):
         super().__init__()
 
         self.cfg= cfg
+        self.variant = variant
+        self.model_type = model_type
 
         model_manager = ModelManager(torch_dtype=torch.bfloat16, device="cpu")
         if not os.path.isfile(dit_path):
@@ -318,7 +322,9 @@ def train(args):
         vae = vae,
         image_encoder = image_encoder,
         prompter = prompter,
-        cfg = args
+        cfg = args,
+        variant=args.variant,
+        model_type=args.model,
     )
 
     # Always check/generate cache

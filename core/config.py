@@ -262,5 +262,17 @@ def parse_args(args=None):
         default=True,
         help="Disable the training progress bar.",
     )
+    parser.add_argument(
+        "--variant",
+        type=str,
+        default="i2v",
+        help="Training variant (e.g. i2v).",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="lora",
+        help="Model type (e.g. lora).",
+    )
     args = parser.parse_args(args)
     return args
