@@ -147,64 +147,84 @@ class WanLoRALightningModel(pl.LightningModule):
             missing, unexpected = model.load_state_dict(state_dict_new, strict=False)
             print(f"Loaded LoRA: {len(missing)} missing, {len(unexpected)} unexpected keys.")
     
+    def encode_video(self, batch):
+        text = batch["text"][0]
+        video = batch["video"]
+        path = batch["path"][0]
+
+        with torch.no_grad():
+            if video is not None:
+                prompt_emb = {'context': self.prompter.encode_prompt(text)}
+                
+                video = video.to(dtype=torch.bfloat16, device=self.device) # [B, C, T, H, W]
+                latents = self.vae.encode(video, device=self.device, **self.tiler_kwargs)[0] # [16, T_latent, H_latent, W_latent]
+                
+                # Image Conditioning (First Frame)
+                if "first_frame" in batch:
+                    # batch["first_frame"] is [B, H, W, C] (0-255 uint8)
+                    first_frame_tensor = batch["first_frame"].float() / 255.0
+                    first_frame_tensor = 2.0 * first_frame_tensor - 1.0
+                    first_frame_tensor = first_frame_tensor.permute(0, 3, 1, 2) # [B, C, H, W]
+                    
+                    # Ensure correct device and dtype
+                    first_frame_tensor = first_frame_tensor.to(device=self.device, dtype=torch.bfloat16)
+
+                    clip_context = self.image_encoder.encode_image(
+                        [first_frame_tensor]).to(
+                            dtype=torch.bfloat16,
+                            device=self.device)
+                    
+                    # VAE condition
+                    num_frames = video.shape[2] 
+                    latent_condition = self.vae.latent_image_condition(
+                        first_frame_tensor, num_frames).to(
+                        dtype=torch.bfloat16, device=self.device)
+
+                    image_emb = {
+                        "clip_feature": clip_context, "y": latent_condition}
+                else:
+                    image_emb = {}
+                
+                return {"latents": latents.unsqueeze(0),
+                    "prompt_emb": prompt_emb, "image_emb": image_emb}
+        return None
+
     def training_step(self, batch, batch_idx):
         diagnostics = {}
-        if self.cfg.cache_latents and hasattr(self, 'latents_cache'):
-             batch_train = self.latents_cache
-        else:
-            text = batch["text"][0]
-            video = batch["video"]
-            path = batch["path"][0]
-    
-            with torch.no_grad():
-                if video is not None:
-                    prompt_emb = {'context': self.prompter.encode_prompt(text)}
-                    
-                    video = video.to(dtype=torch.bfloat16, device=self.device) # [B, C, T, H, W]
-                    latents = self.vae.encode(video, device=self.device, **self.tiler_kwargs)[0] # [16, T_latent, H_latent, W_latent]
-                    
-                    # Image Conditioning (First Frame)
-                    if "first_frame" in batch:
-                        # batch["first_frame"] is [B, H, W, C] (0-255 uint8)
-                        first_frame_tensor = batch["first_frame"].float() / 255.0
-                        first_frame_tensor = 2.0 * first_frame_tensor - 1.0
-                        first_frame_tensor = first_frame_tensor.permute(0, 3, 1, 2) # [B, C, H, W]
-                        
-                        clip_context = self.image_encoder.encode_image(
-                            [first_frame_tensor]).to(
-                                dtype=torch.bfloat16,
-                                device=self.device)
-                        
-                        # VAE condition
-                        num_frames = video.shape[2] 
-                        latent_condition = self.vae.latent_image_condition(
-                            first_frame_tensor, num_frames).to(
-                            dtype=torch.bfloat16, device=self.device)
-    
-                        image_emb = {
-                            "clip_feature": clip_context, "y": latent_condition}
-                    else:
-                        image_emb = {}
-                    
-                    batch_train = {"latents": latents.unsqueeze(0),
-                        "prompt_emb": prompt_emb, "image_emb": image_emb}
-
-            if self.cfg.cache_latents:
-                self.latents_cache = batch_train
         
+        batch_train = None
+        if self.cfg.cache_latents:
+            # Check for disk cache
+            video_path = batch["path"][0]
+            dirname = os.path.dirname(video_path)
+            basename = os.path.basename(video_path)
+            cache_dir = os.path.join(dirname, ".latents_cache")
+            cache_filename = basename + ".pt"
+            cache_path = os.path.join(cache_dir, cache_filename)
+            
+            if os.path.exists(cache_path):
+                try:
+                    batch_train = torch.load(cache_path, map_location=self.device)
+                except Exception as e:
+                    print(f"Failed to load cache from {cache_path}: {e}")
+
+        if batch_train is None:
+            batch_train = self.encode_video(batch)
+
         p = random.random()
-        latents = batch_train["latents"].to(self.device)
+        latents = batch_train["latents"].to(self.device).to(torch.bfloat16)
         prompt_emb = batch_train["prompt_emb"]
         
-        prompt_emb["context"] = prompt_emb["context"].to(self.device)
+        prompt_emb["context"] = prompt_emb["context"].to(self.device).to(torch.bfloat16)
         image_emb = batch_train["image_emb"]
         
         # Dropout
         if "clip_feature" in image_emb:
-            image_emb["clip_feature"] = image_emb["clip_feature"].to(self.device)
+            image_emb["clip_feature"] = image_emb["clip_feature"].to(self.device).to(torch.bfloat16)
             if p < 0.1:
                 image_emb["clip_feature"] = torch.zeros_like(image_emb["clip_feature"])
         if "y" in image_emb:
+            image_emb["y"] = image_emb["y"].to(self.device).to(torch.bfloat16)
             if p < 0.1:
                 image_emb["y"] = torch.zeros_like(image_emb["y"])
     
@@ -301,6 +321,50 @@ def train(args):
         prompter = prompter,
         cfg = args
     )
+
+    if args.cache_latents:
+        # Move model to GPU for encoding
+        model.cuda()
+        print("Checking latent cache...")
+        cache_dir = os.path.join(dataset.videos_dir, ".latents_cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        
+        num_files = len(dataset.video_files)
+        from torch.utils.data import default_collate
+        
+        for i in range(num_files):
+            sample = dataset[i] 
+            path = sample["path"]
+            filename = os.path.basename(path)
+            cache_filename = filename + ".pt"
+            cache_path = os.path.join(cache_dir, cache_filename)
+            
+            if not os.path.exists(cache_path):
+                print(f"Generating cache for {filename}...")
+                batch = default_collate([sample])
+                
+                # Encode
+                encoded = model.encode_video(batch)
+
+                # Move to CPU for saving
+                encoded_cpu = {}
+                for k, v in encoded.items():
+                    if isinstance(v, torch.Tensor):
+                        encoded_cpu[k] = v.cpu()
+                    elif isinstance(v, dict):
+                        encoded_cpu[k] = {}
+                        for k2, v2 in v.items():
+                            if isinstance(v2, torch.Tensor):
+                                encoded_cpu[k][k2] = v2.cpu()
+                            else:
+                                encoded_cpu[k][k2] = v2
+                    else:
+                        encoded_cpu[k] = v
+                
+                torch.save(encoded_cpu, cache_path)
+        
+        print(f"Latent cache verified/generated at {cache_dir}")
+
 
     trainer = pl.Trainer(
         max_epochs=args.max_epochs,
