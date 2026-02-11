@@ -1,0 +1,148 @@
+import torch
+import torchvision
+import torchvision.io
+from diffsynth.models.wan_video_vae import WanVideoVAE
+import os
+import torch.nn.functional as F
+
+def load_video(video_path, max_frames=81):
+    try:
+        import warnings
+        # Suppress the specific deprecation warning from torchvision
+        warnings.filterwarnings("ignore", category=UserWarning, message="The video decoding and encoding capabilities of torchvision are deprecated")
+        
+        # Using read_video. Default output is [T, H, W, C]
+        video, _, _ = torchvision.io.read_video(video_path, output_format="TCHW", pts_unit='sec')
+        # If successful, output is [T, C, H, W]
+    except Exception as e:
+        print(f"Error reading video {video_path}: {e}")
+        return None
+
+    # Handle Frame Count (1 mod 4)
+    # Target should be <= max_frames
+    T = video.shape[0]
+    target_T = min(T, max_frames)
+    # Ensure 1 mod 4
+    # (target_T - 1) // 4 * 4 + 1
+    target_T = (target_T - 1) // 4 * 4 + 1
+    
+    if target_T < 1: 
+        target_T = 1 
+            
+    video = video[:target_T]
+            
+    # Handle Resolution
+    # [T, C, H, W]
+    _, _, H, W = video.shape
+    new_H = round(H / 16) * 16
+    new_W = round(W / 16) * 16
+    
+    if (new_H, new_W) != (H, W):
+            video = F.interpolate(video, size=(new_H, new_W), mode='bilinear', align_corners=False, antialias=True)
+            
+    # Normalize to [-1, 1]
+    if video.dtype == torch.uint8:
+        video = video.float() / 255.0
+        
+    video = 2.0 * video - 1.0 # [-1, 1]
+    
+    return video.permute(1, 0, 2, 3).unsqueeze(0) # [1, C, T, H, W]
+
+
+def main():
+    video_path = "data/videos/davis_camel.mp4"
+    vae_path = "Wan2.1-I2V-14B-720P/Wan2.1_VAE.pth"
+    output_path = "output/wan_vae_comparison.mp4"
+
+    if not os.path.exists(video_path):
+        print(f"Video file not found: {video_path}")
+        return
+
+    if not os.path.exists(vae_path):
+        print(f"VAE weights not found: {vae_path}")
+        return
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    dtype = torch.float32 # Use float32 for compatibility, or bf16 if supported
+
+    print(f"Loading VAE from {vae_path}...")
+    vae = WanVideoVAE()
+    vae.model.load_state_dict(torch.load(vae_path, map_location="cpu"))
+    vae = vae.to(device).to(dtype)
+    vae.eval()
+
+    print(f"Loading video from {video_path}...")
+    video_tensor = load_video(video_path)
+    if video_tensor is None:
+        return
+
+    video_tensor = video_tensor.to(device).to(dtype)
+    print(f"Video tensor shape: {video_tensor.shape}")
+
+    print("Encoding video...")
+    with torch.no_grad():
+        # Encode
+        # latents: [B, C, T_lat, H_lat, W_lat]
+        # The VAE expects [B, C, T, H, W]
+        latents = vae.encode(video_tensor, device=device)
+        print(f"Latents shape: {latents.shape}")
+
+        # Decode
+        print("Decoding latents...")
+        recon_video_batch = vae.decode(latents, device=device)
+        print(f"Reconstructed video batch shape: {recon_video_batch.shape}")
+
+    # Post-process reconstructed video
+    recon_video = recon_video_batch.squeeze(0) # [C, T, H, W]
+    recon_video = (recon_video + 1.0) / 2.0 # [0, 1]
+    recon_video = recon_video.clamp(0, 1)
+    recon_video = (recon_video * 255).to(torch.uint8) # [0, 255]
+
+    # Post-process original video for comparison
+    original_video = video_tensor.squeeze(0)
+    original_video = (original_video + 1.0) / 2.0
+    original_video = original_video.clamp(0, 1)
+    original_video = (original_video * 255).to(torch.uint8)
+
+    # Convert to [T, H, W, C] for saving
+    recon_video = recon_video.permute(1, 2, 3, 0).cpu()
+    original_video = original_video.permute(1, 2, 3, 0).cpu()
+
+    # Dimensions check
+    print(f"Original: {original_video.shape}, Recon: {recon_video.shape}")
+
+    # Resize recon to match original if needed
+    if original_video.shape != recon_video.shape:
+        print("Resizing reconstructed video to match original dimensions...")
+        # Resize spatial dims
+        # recon_video is [T, H, W, C] -> [T, C, H, W] for interpolate
+        recon_video_perm = recon_video.permute(0, 3, 1, 2).float()
+        
+        # Using F.interpolate on [T, C, H, W] treats T as batch? No, interpolate expects [N, C, H, W] usually or [N, C, D, H, W]
+        # Here we want to resize H, W for each frame.
+        target_H, target_W = original_video.shape[1], original_video.shape[2]
+        
+        recon_video_resized = F.interpolate(
+            recon_video_perm, 
+            size=(target_H, target_W), 
+            mode='bilinear', 
+            align_corners=False, 
+            antialias=True
+        )
+        
+        recon_video = recon_video_resized.permute(0, 2, 3, 1).to(torch.uint8)
+        
+        # Handle temporal mismatch if any
+        min_t = min(original_video.shape[0], recon_video.shape[0])
+        original_video = original_video[:min_t]
+        recon_video = recon_video[:min_t]
+
+    # Concatenate side-by-side
+    combined_video = torch.cat([original_video, recon_video], dim=2) # Concatenate along Width
+
+    print(f"Saving comparison video to {output_path}...")
+    torchvision.io.write_video(output_path, combined_video, fps=24) # Assuming 24 fps
+    print("Done!")
+
+if __name__ == "__main__":
+    main()
