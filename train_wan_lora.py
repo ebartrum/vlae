@@ -150,7 +150,6 @@ class WanLoRALightningModel(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         diagnostics = {}
         if self.cfg.cache_latents and hasattr(self, 'latents_cache'):
-             print(f"Using cached latents for step {batch_idx}")
              batch_train = self.latents_cache
         else:
             text = batch["text"][0]
