@@ -3,7 +3,7 @@ import os
 import glob
 from omegaconf import OmegaConf
 from core.utils import load_wan_lora_pipe, CHINESE_NEGATIVE_PROMPT
-from taehv import RGBA_TAEHV, TAEHV
+
 from core.wan_utils import model_fn_wan_video, TeaCache
 from diffsynth.utils import preprocess_images
 from torchvision.transforms.functional import to_pil_image
