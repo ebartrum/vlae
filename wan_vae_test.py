@@ -50,9 +50,18 @@ def load_video(video_path, max_frames=81):
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--vae_type", type=str, default="wan_vae", choices=["wan_vae", "tiny_vae"], help="Type of VAE to use: wan_vae (default) or tiny_vae")
+    args = parser.parse_args()
+
     video_path = "data/videos/davis_camel.mp4"
-    vae_path = "Wan2.1-I2V-14B-720P/Wan2.1_VAE.pth"
-    output_path = "output/wan_vae_comparison.mp4"
+    if args.vae_type == "wan_vae":
+        vae_path = "Wan2.1-I2V-14B-720P/Wan2.1_VAE.pth"
+    else:
+        vae_path = "checkpoints/taew2_1.pth"
+    
+    output_path = f"output/{args.vae_type}_comparison.mp4"
 
     if not os.path.exists(video_path):
         print(f"Video file not found: {video_path}")
@@ -65,11 +74,16 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.float32 # Use float32 for compatibility, or bf16 if supported
 
-    print(f"Loading VAE from {vae_path}...")
-    vae = WanVideoVAE()
-    vae.model.load_state_dict(torch.load(vae_path, map_location="cpu"))
-    vae = vae.to(device).to(dtype)
-    vae.eval()
+    print(f"Loading {args.vae_type} from {vae_path}...")
+    if args.vae_type == "wan_vae":
+        vae = WanVideoVAE()
+        vae.model.load_state_dict(torch.load(vae_path, map_location="cpu"))
+        vae = vae.to(device).to(dtype)
+        vae.eval()
+    else:
+        from taehv import WanCompatibleTAEHV
+        vae = WanCompatibleTAEHV(checkpoint_path=vae_path).to(device).to(dtype)
+        vae.eval()
 
     print(f"Loading video from {video_path}...")
     video_tensor = load_video(video_path)

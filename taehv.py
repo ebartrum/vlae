@@ -337,7 +337,46 @@ class RGBA_TAEHV(BaseTAEHV):
         
         self.load_state_dict(modified_state_dict)
 
+
+class WanCompatibleTAEHV(TAEHV):
+    """TAEHV wrapper that mimics WanVideoVAE interface."""
+    def __init__(self, checkpoint_path="checkpoints/taew2_1.pth"):
+        super().__init__(checkpoint_path=checkpoint_path)
+
+    def encode(self, x, device, **kwargs):
+        """
+        Encode video to latent space.
+        x: [B, C, T, H, W] in [-1, 1]
+        Returns: [B, C, T_lat, H_lat, W_lat]
+        """
+        x = x.to(device)
+        # [B, C, T, H, W] -> [B, T, C, H, W]
+        x = x.permute(0, 2, 1, 3, 4)
+        # [-1, 1] -> [0, 1]
+        x = (x + 1.0) / 2.0
+        
+        latents = self.encode_video(x)
+        # [B, T, C, H, W] -> [B, C, T, H, W]
+        return latents.permute(0, 2, 1, 3, 4)
+
+    def decode(self, latents, device, **kwargs):
+        """
+        Decode latents to video.
+        latents: [B, C, T, H, W]
+        Returns: [B, C, T, H, W] in [-1, 1]
+        """
+        latents = latents.to(device)
+        # [B, C, T, H, W] -> [B, T, C, H, W]
+        latents = latents.permute(0, 2, 1, 3, 4)
+        
+        video = self.decode_video(latents)
+        # [0, 1] -> [-1, 1]
+        video = (video * 2.0) - 1.0
+        # [B, T, C, H, W] -> [B, C, T, H, W]
+        return video.permute(0, 2, 1, 3, 4)
+
 @torch.no_grad()
+
 def main():
     """Run TAEHV roundtrip reconstruction on the given video paths."""
     import os
