@@ -370,6 +370,8 @@ class WanCompatibleTAEHV(TAEHV):
         latents = latents.permute(0, 2, 1, 3, 4)
         
         video = self.decode_video(latents)
+        # [0, 1] -> [-1, 1]
+        video = (video * 2.0) - 1.0
         # [B, T, C, H, W] -> [B, C, T, H, W]
         return video.permute(0, 2, 1, 3, 4)
 
